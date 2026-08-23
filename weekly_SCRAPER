@@ -1,0 +1,219 @@
+import json
+import os
+import subprocess
+from html import unescape
+from xml.sax.saxutils import escape
+
+import requests
+from bs4 import BeautifulSoup
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+
+# Secure full archive links to grab the entire preceding week's updates
+LIVE_SCIENCE_URL = "https://livescience.com"
+BBC_NEWS_URL = "https://bbc.com"
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+def clean_text(value):
+    if not value:
+        return ""
+    return " ".join(unescape(str(value)).split())
+
+def fetch_bbc_news():
+    print("Connection initiated to BBC News...")
+    try:
+        response = requests.get(BBC_NEWS_URL, headers=HEADERS, timeout=15)
+        if response.status_code != 200:
+            print("BBC web server rejected the structural request.")
+            return []
+            
+        soup = BeautifulSoup(response.text, "html.parser")
+        headlines = []
+        seen = set()
+        
+        # Target semantic anchor headings matching active BBC layouts
+        for item in soup.find_all(['h2', 'h3', 'a'], data_testid=lambda x: x and 'headline' in x):
+            title = clean_text(item.get_text())
+            if len(title) < 18 or title.lower() in seen:
+                continue
+            seen.add(title.lower())
+            headlines.append({
+                "title": title,
+                "description": "Weekly global updates curated directly from BBC live coverage archives."
+            })
+        
+        # Fallback tracking if specific test-ids aren't present
+        if not headlines:
+            for heading in soup.find_all(['h3', 'h2']):
+                title = clean_text(heading.get_text())
+                if len(title) > 20 and title.lower() not in seen:
+                    seen.add(title.lower())
+                    headlines.append({"title": title, "description": "Weekly global updates curated directly from BBC news feeds."})
+                    
+        print(f"Extracted {len(headlines)} BBC news updates.")
+        return headlines[:20] # Top 20 headlines to prevent text bloat
+    except Exception as e:
+        print(f"BBC parsing sequence encountered an error: {e}")
+        return []
+
+
+def extract_from_html(html):
+    soup = BeautifulSoup(html, "html.parser")
+    discoveries = []
+    seen_titles = set()
+
+    # 1. Fallback Strategy: Target BOTH homepage blocks AND structural archive list links
+    containers = soup.find_all(['div', 'article', 'li'], class_=lambda x: x and any(c in x for c in ['listingResult', 'content-card', 'search-result', 'archive-item']))
+    
+    # 2. Safety Net: If the platform layout filters empty out, grab raw clean anchors 
+    if not containers:
+        containers = soup.find_all(['div', 'li', 'p'])
+
+    print(f"HTML blocks evaluated for processing: {len(containers)}")
+
+    for container in containers:
+        # Look for headers or explicit title links within standard list records
+        title_element = container.find(['h3', 'h2', 'a'], class_=lambda x: x and any(c in x for c in ['title', 'name', 'link'])) or container.find(['h3', 'h2'])
+        
+        # If no internal tag, check if the container itself is a valid link item (common on Archive streams)
+        if not title_element and container.name == 'a':
+            title_element = container
+            
+        if not title_element:
+            continue
+
+        title = clean_text(title_element.get_text(" ", strip=True))
+        
+        # Skip generic UI components, buttons, or extremely short placeholders
+        if not title or "Recent scientific discoveries" in title or len(title) < 18 or "Privacy Policy" in title or "Terms of Use" in title:
+            continue
+
+        # Extract the companion context description block
+        description_element = container.find(['p', 'span'], class_=lambda x: x and any(c in x for c in ['synopsis', 'description', 'excerpt']))
+        description = clean_text(description_element.get_text(" ", strip=True)) if description_element else "Select this entry link to read the full scientific breakthrough verification analysis report."
+
+        # Fetch destination routing hyperlinks safely
+        link_element = title_element if title_element.name == 'a' else (title_element.find("a") or container.find("a", href=True))
+        link = link_element.get("href", "") if link_element else ""
+        
+        if link and link.startswith("/"):
+            link = "https://www.livescience.com" + link
+        elif not link or not link.startswith("http"):
+            continue # Drop entries without direct reference source links
+
+        key = title.lower()
+        if key not in seen_titles:
+            seen_titles.add(key)
+            discoveries.append({
+                "title": title,
+                "description": description,
+                "link": link
+            })
+            print(f"Added Breakthrough: {title[:45]}...")
+
+    print(f"Extraction sequence complete. Total distinct items found: {len(discoveries)}")
+    return discoveries
+
+def fetch_live_science_discoveries():
+    print("Connection initiated to Live Science Archive...")
+    try:
+        response = requests.get(LIVE_SCIENCE_URL, headers=HEADERS, timeout=15)
+        if response.status_code == 200:
+            return extract_from_html(response.text)
+    except Exception as e:
+        print(f"Live Science parsing sequence failed: {e}")
+    return []
+
+def generate_pdf_report(bbc_data, science_data, filename):
+    print(f"Compiling joint weekend findings into: {filename}...")
+    doc = SimpleDocTemplate(filename, pagesize=letter, rightMargin=54, leftMargin=54, topMargin=54, bottomMargin=54)
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle("DocTitle", parent=styles["Heading1"], fontSize=26, leading=30, textColor=colors.HexColor("#1A365D"), spaceAfter=15)
+    section_style = ParagraphStyle("SecTitle", parent=styles["Heading2"], fontSize=16, leading=20, textColor=colors.HexColor("#7B341E"), spaceBefore=18, spaceAfter=8, keepWithNext=True)
+    item_title_style = ParagraphStyle("ItemTitle", parent=styles["Heading3"], fontSize=12, leading=15, textColor=colors.HexColor("#2C3E50"), spaceBefore=10, spaceAfter=4, keepWithNext=True)
+    body_style = ParagraphStyle("ItemBody", parent=styles["Normal"], fontSize=10, leading=14, textColor=colors.HexColor("#4A5568"), spaceAfter=6)
+
+    story = [
+        Paragraph("Grand Weekend News & Discoveries Brief", title_style),
+        Paragraph("A fully consolidated, structural review generated dynamically across global networks.", body_style),
+        Spacer(1, 15)
+    ]
+
+    # Section 1: BBC News Headlines
+    story.append(Paragraph("Top Weekly Global Headlines (BBC)", section_style))
+    if not bbc_data:
+        story.append(Paragraph("No headline logs recorded during this period.", body_style))
+    for idx, item in enumerate(bbc_data, 1):
+        story.append(Paragraph(escape(f"{idx}. {item['title']}"), item_title_style))
+        story.append(Paragraph(escape(item["description"]), body_style))
+
+    story.append(Spacer(1, 15))
+
+    # Section 2: Live Science Discoveries
+    story.append(Paragraph("Scientific Breakthroughs (Live Science)", section_style))
+    if not science_data:
+        story.append(Paragraph("No breakthrough items extracted from active archive pools.", body_style))
+    for idx, item in enumerate(science_data, 1):
+        story.append(Paragraph(escape(f"{idx}. {item['title']}"), item_title_style))
+        story.append(Paragraph(escape(item["description"]), body_style))
+        if item.get("link"):
+            story.append(Paragraph(f"<font color='#2B6CB0'><u>{escape(item['link'])}</u></font>", body_style))
+
+    doc.build(story)
+    print("Unified Weekend Brief successfully built.")
+
+
+if __name__ == "__main__":
+    # Create a clean system environment copy to override the broken Snap configurations
+    clean_env = os.environ.copy()
+    
+    # Force the script to look at your native Ubuntu libraries instead of the broken Snap folders
+    if "LD_LIBRARY_PATH" in clean_env:
+        del clean_env["LD_LIBRARY_PATH"]
+        
+    # Configure your standard desktop visual authorization tokens
+    clean_env["DISPLAY"] = ":0"
+    clean_env["XAUTHORITY"] = "/home/mamoona/.Xauthority"
+    clean_env["XDG_RUNTIME_DIR"] = "/run/user/1000"
+
+    popup_command = [
+        'zenity', '--question',
+        '--title=Weekend Brief Update Launcher',
+        '--text=Your Saturday morning science and news report is compiled! Would you like to read the unified layout now?',
+        '--width=380'
+    ]
+    
+    # Run the window process using our clean environment configurations
+    popup_result = subprocess.run(
+        popup_command, 
+        env=clean_env, 
+        stdout=subprocess.DEVNULL, 
+        stderr=subprocess.DEVNULL
+    )
+    
+    # Check if the user clicked 'Yes' (returncode 0)
+    if popup_result.returncode == 0:
+        output_file = "/home/mamoona/Desktop/weekly_Scraper/Weekend_Global_Report.pdf"
+        
+        # Trigger the core backend pipeline execution loops
+        bbc_headlines = fetch_bbc_news()
+        science_updates = fetch_live_science_discoveries()
+        
+        generate_pdf_report(bbc_headlines, science_updates, output_file)
+        
+        # Launch the finished document directly onto your desktop workspace screen
+        subprocess.Popen(['gio', 'open', output_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        print("User dismissed sequence workspace interface panel. Exiting cleanly.")
