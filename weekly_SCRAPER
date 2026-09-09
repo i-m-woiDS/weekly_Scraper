@@ -11,7 +11,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
-# Secure full archive links to grab the entire preceding week's updates
+
 LIVE_SCIENCE_URL = "https://livescience.com"
 BBC_NEWS_URL = "https://bbc.com"
 
@@ -42,7 +42,7 @@ def fetch_bbc_news():
         headlines = []
         seen = set()
         
-        # Target semantic anchor headings matching active BBC layouts
+        # Target semantic anchor headings that match active BBC layouts
         for item in soup.find_all(['h2', 'h3', 'a'], data_testid=lambda x: x and 'headline' in x):
             title = clean_text(item.get_text())
             if len(title) < 18 or title.lower() in seen:
@@ -53,7 +53,7 @@ def fetch_bbc_news():
                 "description": "Weekly global updates curated directly from BBC live coverage archives."
             })
         
-        # Fallback tracking if specific test-ids aren't present
+        
         if not headlines:
             for heading in soup.find_all(['h3', 'h2']):
                 title = clean_text(heading.get_text())
@@ -73,20 +73,20 @@ def extract_from_html(html):
     discoveries = []
     seen_titles = set()
 
-    # 1. Fallback Strategy: Target BOTH homepage blocks AND structural archive list links
+    # 1. will Target BOTH homepage blocks and structural archive list links
     containers = soup.find_all(['div', 'article', 'li'], class_=lambda x: x and any(c in x for c in ['listingResult', 'content-card', 'search-result', 'archive-item']))
     
-    # 2. Safety Net: If the platform layout filters empty out, grab raw clean anchors 
+     
     if not containers:
         containers = soup.find_all(['div', 'li', 'p'])
 
     print(f"HTML blocks evaluated for processing: {len(containers)}")
 
     for container in containers:
-        # Look for headers or explicit title links within standard list records
+        
         title_element = container.find(['h3', 'h2', 'a'], class_=lambda x: x and any(c in x for c in ['title', 'name', 'link'])) or container.find(['h3', 'h2'])
         
-        # If no internal tag, check if the container itself is a valid link item (common on Archive streams)
+        
         if not title_element and container.name == 'a':
             title_element = container
             
@@ -99,11 +99,11 @@ def extract_from_html(html):
         if not title or "Recent scientific discoveries" in title or len(title) < 18 or "Privacy Policy" in title or "Terms of Use" in title:
             continue
 
-        # Extract the companion context description block
+        
         description_element = container.find(['p', 'span'], class_=lambda x: x and any(c in x for c in ['synopsis', 'description', 'excerpt']))
         description = clean_text(description_element.get_text(" ", strip=True)) if description_element else "Select this entry link to read the full scientific breakthrough verification analysis report."
 
-        # Fetch destination routing hyperlinks safely
+        
         link_element = title_element if title_element.name == 'a' else (title_element.find("a") or container.find("a", href=True))
         link = link_element.get("href", "") if link_element else ""
         
@@ -183,7 +183,7 @@ if __name__ == "__main__":
     if "LD_LIBRARY_PATH" in clean_env:
         del clean_env["LD_LIBRARY_PATH"]
         
-    # Configure your standard desktop visual authorization tokens
+    
     clean_env["DISPLAY"] = ":0"
     clean_env["XAUTHORITY"] = "/home/mamoona/.Xauthority"
     clean_env["XDG_RUNTIME_DIR"] = "/run/user/1000"
@@ -195,7 +195,7 @@ if __name__ == "__main__":
         '--width=380'
     ]
     
-    # Run the window process using our clean environment configurations
+    
     popup_result = subprocess.run(
         popup_command, 
         env=clean_env, 
@@ -203,11 +203,11 @@ if __name__ == "__main__":
         stderr=subprocess.DEVNULL
     )
     
-    # Check if the user clicked 'Yes' (returncode 0)
+    
     if popup_result.returncode == 0:
         output_file = "/home/mamoona/Desktop/weekly_Scraper/Weekend_Global_Report.pdf"
         
-        # Trigger the core backend pipeline execution loops
+        
         bbc_headlines = fetch_bbc_news()
         science_updates = fetch_live_science_discoveries()
         
